@@ -10,6 +10,11 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 // Imports the HTTP client transport so the MCP client can communicate with the MCP server over HTTP
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
+import express from "express";
+
+const app = express();
+
+app.use(express.json());
 
 // Creates the Gemini AI client using the Gemini API key from .env
 const ai = new GoogleGenAI({
@@ -170,7 +175,7 @@ function buildUserParts({ message, mediaItems }) {
 
 // Main agent function
 // This is exported so server.js can call it from the /api/chat route
-export async function runAgent({ userMessage, mediaItems = [] }) {
+async function runAgent({ userMessage, mediaItems = [] }) {
   await connectMcpServer();
 
   // Gets the available tools from the MCP server
@@ -188,6 +193,7 @@ You are a helpful AI social media posting assistant.
 Your job is to help users create, edit, and publish Facebook Page posts.
 
 Important rules:
+- WHENEVER YOU GIVE THE FINAL RESPONSE, ALWAYS SAY WHICH TOOL WAS USED
 - Do not publish unless the user clearly asks to publish/post.
 - If the user only asks for a draft, write the draft but do not call a posting tool.
 - If the user asks to post one image or one video, use facebookPostSingleMedia.
@@ -279,3 +285,20 @@ Media item format:
 
   return secondResponse.text;
 }
+
+app.post("/agent", async (req, res) => {
+  try {
+    const response = await runAgent(req.body.message, req.body.media_urls);
+    res.json({
+      agentResponse: response
+    });
+  }
+
+  catch(error) {
+    res.json({
+      errorMessage: error.message
+    })
+  }
+  
+
+})
