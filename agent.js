@@ -108,6 +108,10 @@ async function callMcpTools(functionCalls) {
     const toolResult = await mcpClient.callTool({
       name: functionCall.name,
       arguments: args
+    },
+    undefined,
+    {
+      timeout: 100000
     });
 
     const toolResultText = extractTextFromMcpResult(toolResult);
@@ -175,19 +179,20 @@ function buildUserParts({ message, mediaItems }) {
 
 // Main agent function
 // This is exported so server.js can call it from the /api/chat route
-async function runAgent({ userMessage, mediaItems = [] }) {
-  await connectMcpServer();
+export async function runAgent({ userMessage, mediaItems = [] }) {
+  try {
+    await connectMcpServer();
 
-  // Gets the available tools from the MCP server
-  const toolsResponse = await mcpClient.listTools();
+    // Gets the available tools from the MCP server
+    const toolsResponse = await mcpClient.listTools();
 
-  // Converts MCP tools into Gemini-compatible tool declarations
-  const functionDeclarations = convertMcpToolsToGeminiFunctionDeclarations(
-    toolsResponse.tools
-  );
+    // Converts MCP tools into Gemini-compatible tool declarations
+    const functionDeclarations = convertMcpToolsToGeminiFunctionDeclarations(
+      toolsResponse.tools
+    );
 
-  // System instructions that control how the agent behaves
-  const systemInstruction = `
+    // System instructions that control how the agent behaves
+    const systemInstruction = `
 You are a helpful AI social media posting assistant.
 
 Your job is to help users create, edit, and publish Facebook Page posts.
@@ -204,6 +209,8 @@ Important rules:
 - Keep captions clear and appropriate for the platform.
 - After a tool result comes back, explain the result in simple plain English.
 - Do not mention internal tool names unless the user asks how the system works.
+- If there is any error, you do not underany circum stance mention the specifics of the error
+- Keep it very brief (e.g. There is an issue with the backend)
 
 Media item format:
 {
@@ -212,78 +219,107 @@ Media item format:
 }
 `;
 
-  // First Gemini call
-  // Gemini decides whether it can answer directly or needs to call an MCP tool
-  const firstResponse = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
-    contents: [
-      {
-        role: "user",
-        parts: buildUserParts({
-          message: userMessage,
-          mediaItems
-        })
-      }
-    ],
-    config: {
-      systemInstruction,
-      tools: [
+    // First Gemini call
+    // Gemini decides whether it can answer directly or needs to call an MCP tool
+    const firstResponse = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: [
         {
-          functionDeclarations
+          role: "user",
+          parts: buildUserParts({
+            message: userMessage,
+            mediaItems
+          })
         }
-      ]
+      ],
+      config: {
+        systemInstruction,
+        tools: [
+          {
+            functionDeclarations
+          }
+        ]
+      }
+    });
+
+    // Gets the function calls Gemini requested
+    const functionCalls = firstResponse.functionCalls;
+
+    // If Gemini did not request a tool, return Gemini's normal text answer
+    if (!functionCalls || functionCalls.length === 0) {
+      return firstResponse.text;
     }
-  });
 
-  // Gets the function calls Gemini requested
-  const functionCalls = firstResponse.functionCalls;
+    // Calls the MCP tools that Gemini requested
+    const toolResults = await callMcpTools(functionCalls);
 
-  // If Gemini did not request a tool, return Gemini's normal text answer
-  if (!functionCalls || functionCalls.length === 0) {
-    return firstResponse.text;
+    // Builds the functionCall parts to replay Gemini's tool choice back to Gemini
+    const functionCallParts = buildFunctionCallParts(functionCalls);
+
+    // Builds the functionResponse parts containing the MCP tool results
+    const functionResponseParts = buildFunctionResponseParts(toolResults);
+
+    // Second Gemini call
+    // This gives Gemini the tool results so it can explain what happened to the user
+    const secondResponse = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: [
+        {
+          role: "user",
+          parts: buildUserParts({
+            message: userMessage,
+            mediaItems
+          })
+        },
+        {
+          role: "model",
+          parts: functionCallParts
+        },
+        {
+          role: "user",
+          parts: functionResponseParts
+        }
+      ],
+      config: {
+        systemInstruction,
+        tools: [
+          {
+            functionDeclarations
+          }
+        ]
+      }
+    });
+
+    return secondResponse.text;
   }
 
-  // Calls the MCP tools that Gemini requested
-  const toolResults = await callMcpTools(functionCalls);
-
-  // Builds the functionCall parts to replay Gemini's tool choice back to Gemini
-  const functionCallParts = buildFunctionCallParts(functionCalls);
-
-  // Builds the functionResponse parts containing the MCP tool results
-  const functionResponseParts = buildFunctionResponseParts(toolResults);
-
-  // Second Gemini call
-  // This gives Gemini the tool results so it can explain what happened to the user
-  const secondResponse = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
-    contents: [
-      {
-        role: "user",
-        parts: buildUserParts({
-          message: userMessage,
-          mediaItems
-        })
-      },
-      {
-        role: "model",
-        parts: functionCallParts
-      },
-      {
-        role: "user",
-        parts: functionResponseParts
-      }
-    ],
-    config: {
-      systemInstruction,
-      tools: [
+  catch (error) {
+    const error_reply = error.message;
+    const errorResponse = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: [
         {
-          functionDeclarations
+          role: "user",
+          parts: [
+            {
+              text: error_reply
+            }
+          ]
         }
-      ]
-    }
-  });
+      ],
 
-  return secondResponse.text;
+      config: {
+        systemInstruction,
+        tools: [
+          {
+            functionDeclarations
+          }
+        ]
+      }
+    });
+
+    return errorResponse.text;
+  }
 }
 
 app.post("/agent", async (req, res) => {
@@ -302,3 +338,11 @@ app.post("/agent", async (req, res) => {
   
 
 })
+
+const port = process.env.PORT;
+
+app.listen(port, '0.0.0.0', () => {
+  console.log(
+    `Running on Port ${port}`
+  );
+});

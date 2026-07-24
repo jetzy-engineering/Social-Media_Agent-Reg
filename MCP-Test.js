@@ -10,6 +10,9 @@ async function testAgent() {
       mediaItems: [
         {
           url: "https://samplelib.com/lib/preview/mp4/sample-5s.mp4"
+        },
+        {
+          url: "https://i.ytimg.com/vi/ekILakPyUu4/maxresdefault.jpg"
         }
       ]
     });
