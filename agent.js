@@ -7,12 +7,21 @@ import { GoogleGenAI } from "@google/genai";
 // Imports the MCP client so this agent can connect to the MCP server
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 
+import cors from "cors";
+
 // Imports the HTTP client transport so the MCP client can communicate with the MCP server over HTTP
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 import express from "express";
+import { handleRequest } from "./mcp-server.js";
 
 const app = express();
+
+app.use(
+  cors({
+    origin: "https://social-media-frontend-livid.vercel.app"
+  })
+);
 
 app.use(express.json());
 
@@ -211,6 +220,8 @@ Important rules:
 - Do not mention internal tool names unless the user asks how the system works.
 - If there is any error, you do not underany circum stance mention the specifics of the error
 - Keep it very brief (e.g. There is an issue with the backend)
+- Now if they ask for something that is not in the programs or your capability based on the tools you are provided,
+  if you are provided any, respond kindly and carefully
 
 Media item format:
 {
@@ -309,12 +320,7 @@ Media item format:
       ],
 
       config: {
-        systemInstruction,
-        tools: [
-          {
-            functionDeclarations
-          }
-        ]
+        systemInstruction: 'Do not under any circumstance say the full issue, just keep it simple by saying there was a backend issue, NO REVEALING DETAILS.'
       }
     });
 
@@ -324,20 +330,25 @@ Media item format:
 
 app.post("/agent", async (req, res) => {
   try {
-    const response = await runAgent(req.body.message, req.body.media_urls);
-    res.json({
+    const response = await runAgent({
+      userMessage: req.body.message,
+      mediaItems: req.body.mediaItems
+    });
+    res.status(200).json({
       agentResponse: response
     });
   }
 
   catch(error) {
-    res.json({
+    res.status(500).json({
       errorMessage: error.message
     })
   }
   
 
 })
+
+app.post("/mcp", handleRequest);
 
 const port = process.env.PORT;
 
